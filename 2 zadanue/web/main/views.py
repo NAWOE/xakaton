@@ -27,7 +27,7 @@ PLACES = [
 ]
 
 def get_distance_meters(lat1, lon1, lat2, lon2):
-    R = 6371000  # Радиус Земли в метрах
+    R = 6371000  # Радиус Земли в метраx
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
     dlambda = math.radians(lon2 - lon1)
