@@ -1,7 +1,6 @@
 from django.shortcuts import render, redirect
 from django.http import JsonResponse
 from .logic import solve_route
-from .models import UserRoute, RoutePoint
 import math
 
 # База данных достопримечательностей Вологды (настоящие координаты)
@@ -26,7 +25,6 @@ PLACES = [
     {'id': 17, 'name': 'Памятник В.В. Маяковскому', 'lat': 59.22292149112416, 'lon': 39.87909972667695},
     {'id': 18, 'name': 'Квартира Батюшкова К.Н.', 'lat': 59.22146388178832, 'lon': 39.883412718772895}
 ]
-
 
 def get_distance_meters(lat1, lon1, lat2, lon2):
     R = 6371000  # Радиус Земли в метрах
@@ -120,3 +118,35 @@ def index(request):
         'saved_routes': saved_routes
     }
     return render(request, 'main/index.html', context)
+
+
+def load_route(request, route_id):
+    """Загрузка сохраненного маршрута"""
+    try:
+        from .models import UserRoute
+        user_route = UserRoute.objects.get(id=route_id)
+        route_points = user_route.points.all()
+
+        route_data = {
+            'name': user_route.name,
+            'description': user_route.description,
+            'max_distance': user_route.max_distance,
+            'points': list(route_points.values('place_id', 'place_name', 'lat', 'lon', 'order'))
+        }
+
+        return JsonResponse(route_data)
+    except Exception as e:
+        return JsonResponse({'error': 'Маршрут не найден или база данных не доступна'}, status=404)
+
+
+def delete_route(request, route_id):
+    """Удаление маршрута"""
+    if request.method == 'POST':
+        try:
+            from .models import UserRoute
+            user_route = UserRoute.objects.get(id=route_id)
+            user_route.delete()
+            return JsonResponse({'success': True})
+        except Exception as e:
+            return JsonResponse({'error': 'Маршрут не найден'}, status=404)
+    return JsonResponse({'error': 'Неверный метод'}, status=400)
