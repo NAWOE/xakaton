@@ -26,6 +26,18 @@
             background-color: #e7f3ff !important;
             border-color: #0d6efd !important;
         }
+        .saved-routes {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .route-item {
+            border-left: 4px solid #0d6efd;
+            transition: all 0.3s ease;
+        }
+        .route-item:hover {
+            background-color: #f8f9fa;
+            transform: translateX(5px);
+        }
 
         /* Адаптивность для мобильных устройств */
         @media (max-width: 768px) {
@@ -49,10 +61,6 @@
             .btn-group-vertical {
                 width: 100%;
             }
-        }
-
-        .marker-selected {
-            filter: hue-rotate(120deg) saturate(200%);
         }
     </style>
 </head>
@@ -88,7 +96,7 @@
                             </button>
                         </div>
                         <div class="form-text small mt-2">
-                             Кликайте на карте, чтобы добавить точки области. Нужно минимум 3 точки.
+                            Кликайте на карте, чтобы добавить точки области. Нужно минимум 3 точки.
                         </div>
                     </div>
 
@@ -103,8 +111,8 @@
                         {% endfor %}
                     </div>
 
-                    <button type="submit" class="btn btn-primary w-100 py-2">
-                         Построить маршрут
+                    <button type="submit" name="build_route" class="btn btn-primary w-100 py-2">
+                        Построить маршрут
                     </button>
                 </form>
             </div>
@@ -120,12 +128,12 @@
         </div>
     </div>
 
-    <!-- Результаты маршрута -->
+    <!-- Результаты маршрута и сохранение -->
     {% if route %}
     <div class="row mt-3">
         <div class="col-12">
             <div class="card p-3 border-success shadow-sm">
-                <h5 class="text-success mb-3">🗺️ Найденный маршрут ({{ route|length }} объектов):</h5>
+                <h5 class="text-success mb-3">Найденный маршрут ({{ route|length }} объектов):</h5>
                 <div class="row">
                     <div class="col-md-8">
                         <ol class="mb-0">
@@ -138,10 +146,75 @@
                         <span class="badge bg-success fs-6">Готово!</span>
                     </div>
                 </div>
+
+                <!-- Форма сохранения маршрута -->
+                <div class="mt-4 p-3 bg-light rounded">
+                    <h6>Сохранить этот маршрут:</h6>
+                    <form method="post" class="row g-2">
+                        {% csrf_token %}
+                        <div class="col-md-6">
+                            <input type="text" name="route_name" class="form-control" placeholder="Название маршрута" required maxlength="200">
+                        </div>
+                        <div class="col-md-4">
+                            <input type="text" name="route_description" class="form-control" placeholder="Описание (необязательно)" maxlength="500">
+                        </div>
+                        <div class="col-md-2">
+                            <button type="submit" name="save_route" class="btn btn-success w-100">Сохранить</button>
+                        </div>
+                    </form>
+                </div>
             </div>
         </div>
     </div>
     {% endif %}
+
+    <!-- Сохраненные маршруты -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">Сохраненные маршруты</h5>
+                </div>
+                <div class="card-body">
+                    {% if saved_routes %}
+                    <div class="saved-routes">
+                        {% for saved_route in saved_routes %}
+                        <div class="route-item card mb-2">
+                            <div class="card-body py-2">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <h6 class="mb-1">{{ saved_route.name }}</h6>
+                                        <p class="mb-1 text-muted small">
+                                            {{ saved_route.description|default:"Без описания" }}
+                                        </p>
+                                        <small class="text-muted">
+                                            Макс. расстояние: {{ saved_route.max_distance }}м •
+                                            Точек: {{ saved_route.points.count }} •
+                                            Создан: {{ saved_route.created_at|date:"d.m.Y H:i" }}
+                                        </small>
+                                    </div>
+                                    <div class="btn-group">
+                                        <button type="button" class="btn btn-outline-primary btn-sm load-route"
+                                                data-route-id="{{ saved_route.id }}">
+                                            Загрузить
+                                        </button>
+                                        <button type="button" class="btn btn-outline-danger btn-sm delete-route"
+                                                data-route-id="{{ saved_route.id }}">
+                                            Удалить
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="text-muted text-center">Пока нет сохраненных маршрутов</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- Скрипты карты -->
@@ -149,25 +222,19 @@
 <script>
     // 1. Инициализация карты (центр Вологды)
     var map = L.map('map').setView([59.2239, 39.8825], 15);
-
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© OpenStreetMap contributors'
     }).addTo(map);
 
-    // 2. Добавляем все точки на карту
-    var placesData = [
-        {% for place in places %}
-            {
-                id: {{ place.id }},
-                name: "{{ place.name }}",
-                lat: {{ place.lat|stringformat:"f" }},
-                lon: {{ place.lon|stringformat:"f" }}
-            },
-        {% endfor %}
-    ];
-
+    // 2. Глобальные переменные
     var markers = [];
     var selectedMarkers = new Set();
+    var currentRoutePolyline = null;
+    var currentRouteMarkers = [];
+    var isDrawing = false;
+    var polygonPoints = [];
+    var selectionPolygon = null;
+    var pointMarkers = [];
 
     // Создаем кастомные иконки
     var defaultIcon = new L.Icon.Default();
@@ -180,27 +247,175 @@
         shadowSize: [41, 41]
     });
 
+    // 3. Добавляем все точки на карту
+    var placesData = [
+        {% for place in places %}
+            {
+                id: {{ place.id }},
+                name: "{{ place.name }}",
+                lat: {{ place.lat|stringformat:"f" }},
+                lon: {{ place.lon|stringformat:"f" }}
+            },
+        {% endfor %}
+    ];
+
     placesData.forEach(function(p) {
         var marker = L.marker([p.lat, p.lon], { icon: defaultIcon }).addTo(map)
             .bindPopup("<b>" + p.name + "</b><br><small>Кликните для выбора</small>");
 
-        // Сохраняем ссылку на оригинальный маркер
         marker.placeId = p.id;
         markers.push(marker);
 
-        // Обработчик клика по маркеру
         marker.on('click', function() {
             togglePlaceSelection(p.id);
         });
     });
 
-    // 3. Переменные для выделения области
-    var isDrawing = false;
-    var polygonPoints = [];
-    var selectionPolygon = null;
-    var pointMarkers = [];
+    // 4. Функции для работы с маршрутами
+    function clearCurrentRoute() {
+        if (currentRoutePolyline) {
+            map.removeLayer(currentRoutePolyline);
+            currentRoutePolyline = null;
+        }
+        currentRouteMarkers.forEach(function(marker) {
+            map.removeLayer(marker);
+        });
+        currentRouteMarkers = [];
+    }
 
-    // 4. Функции для работы с выделением
+    function displayRoute(routePoints, routeNames, maxDistance) {
+        clearCurrentRoute();
+
+        // Рисуем линию маршрута
+        currentRoutePolyline = L.polyline(routePoints, {
+            color: 'red',
+            weight: 5,
+            opacity: 0.7
+        }).addTo(map);
+
+        // Добавляем маркеры с номерами
+        routePoints.forEach(function(point, index) {
+            var marker = L.marker(point, {
+                icon: L.divIcon({
+                    className: 'route-marker',
+                    html: '<div style="background: red; color: white; border-radius: 50%; width: 25px; height: 25px; display: flex; align-items: center; justify-content: center; font-weight: bold;">' + (index + 1) + '</div>',
+                    iconSize: [25, 25],
+                    iconAnchor: [12, 12]
+                })
+            }).addTo(map).bindPopup('<strong>' + (index + 1) + '. ' + routeNames[index] + '</strong>');
+
+            currentRouteMarkers.push(marker);
+        });
+
+        // Зуммируем карту на маршрут
+        map.fitBounds(currentRoutePolyline.getBounds());
+    }
+
+    // 5. Загрузка сохраненного маршрута
+    document.querySelectorAll('.load-route').forEach(function(button) {
+        button.addEventListener('click', function() {
+            var routeId = this.getAttribute('data-route-id');
+
+            fetch('/load_route/' + routeId + '/')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        alert('Ошибка: ' + data.error);
+                        return;
+                    }
+
+                    // Подготавливаем данные для отображения
+                    var routePoints = data.points.map(point => [point.lat, point.lon]);
+                    var routeNames = data.points.map(point => point.place_name);
+
+                    // Отображаем маршрут на карте
+                    displayRoute(routePoints, routeNames, data.max_distance);
+
+                    // Выделяем чекбоксы
+                    selectedMarkers.clear();
+                    data.points.forEach(point => {
+                        selectedMarkers.add(point.place_id);
+                    });
+                    updateCheckboxesFromSelection();
+                    updateMarkersAppearance();
+
+                    // Обновляем поле расстояния
+                    document.querySelector('input[name="distance"]').value = data.max_distance;
+
+                    alert('Маршрут "' + data.name + '" загружен!');
+                })
+                .catch(error => {
+                    console.error('Ошибка:', error);
+                    alert('Ошибка при загрузке маршрута');
+                });
+        });
+    });
+
+    // 6. Удаление маршрута
+    document.querySelectorAll('.delete-route').forEach(function(button) {
+        button.addEventListener('click', function() {
+            var routeId = this.getAttribute('data-route-id');
+
+            if (confirm('Вы уверены, что хотите удалить этот маршрут?')) {
+                fetch('/delete_route/' + routeId + '/', {
+                    method: 'POST',
+                    headers: {
+                        'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        location.reload();
+                    } else {
+                        alert('Ошибка при удалении маршрута');
+                    }
+                })
+                .catch(error => {
+                    console.error('Ошибка:', error);
+                    alert('Ошибка при удалении маршрута');
+                });
+            }
+        });
+    });
+
+    // 7. Функции для выделения области (остаются без изменений)
+    // ... (все функции startDrawing, finishDrawing, clearSelection, updatePolygon,
+    // updateSelectionFromPolygon, isPointInPolygon, togglePlaceSelection,
+    // updateCheckboxesFromSelection, updateMarkersAppearance остаются такими же)
+
+    // 8. Инициализация обработчиков кнопок выделения
+    document.getElementById('startDrawing').addEventListener('click', startDrawing);
+    document.getElementById('finishDrawing').addEventListener('click', finishDrawing);
+    document.getElementById('clearSelection').addEventListener('click', clearSelection);
+
+    // 9. Инициализация выбранных маркеров из формы
+    document.addEventListener('DOMContentLoaded', function() {
+        var initialCheckboxes = document.querySelectorAll('input[name="places"]:checked');
+        initialCheckboxes.forEach(function(checkbox) {
+            selectedMarkers.add(parseInt(checkbox.value));
+        });
+        updateMarkersAppearance();
+    });
+
+    // 10. Если есть текущий маршрут - отображаем его
+    {% if route %}
+        var routePoints = [
+            {% for point in route %}
+                [{{ point.lat|stringformat:"f" }}, {{ point.lon|stringformat:"f" }}],
+            {% endfor %}
+        ];
+
+        var routeNames = [
+            {% for point in route %}
+                "{{ point.name }}",
+            {% endfor %}
+        ];
+
+        displayRoute(routePoints, routeNames, {{ max_d }});
+    {% endif %}
+
+    // 11. Функции для выделения области (добавьте их сюда)
     function startDrawing() {
         isDrawing = true;
         polygonPoints = [];
@@ -209,8 +424,6 @@
         document.getElementById('finishDrawing').disabled = false;
         document.getElementById('startDrawing').classList.add('selection-active');
         map.doubleClickZoom.disable();
-
-        // Обновляем подсказку
         updateDrawingHint('Кликайте на карте, чтобы добавить точки области. Двойной клик - завершить.');
     }
 
@@ -236,8 +449,6 @@
         document.getElementById('finishDrawing').disabled = true;
         document.getElementById('startDrawing').classList.remove('selection-active');
         map.doubleClickZoom.enable();
-
-        // Сбрасываем все выделения
         selectedMarkers.clear();
         updateCheckboxesFromSelection();
         updateMarkersAppearance();
@@ -245,13 +456,10 @@
     }
 
     function clearSelectionVisuals() {
-        // Удаляем полигон
         if (selectionPolygon) {
             map.removeLayer(selectionPolygon);
             selectionPolygon = null;
         }
-
-        // Удаляем точки
         pointMarkers.forEach(function(marker) {
             map.removeLayer(marker);
         });
@@ -265,80 +473,57 @@
         }
     }
 
-    // 5. Алгоритм построения полигона (связывание точек)
     function updatePolygon() {
-        // Удаляем старый полигон
         if (selectionPolygon) {
             map.removeLayer(selectionPolygon);
         }
-
         if (polygonPoints.length >= 3) {
-            // Создаем массив точек для полигона согласно алгоритму
             var polygonPointsArray = [];
-
             if (polygonPoints.length === 3) {
-                // Для 3 точек: связываем 1-2-3
                 polygonPointsArray = [polygonPoints[0], polygonPoints[1], polygonPoints[2]];
             } else if (polygonPoints.length > 3) {
-                // Для каждой последующей точки: связываем с 1 и предыдущей
                 polygonPointsArray = [polygonPoints[0], polygonPoints[1]];
-
                 for (var i = 2; i < polygonPoints.length; i++) {
                     polygonPointsArray.push(polygonPoints[i]);
                 }
-
-                // Замыкаем полигон
                 polygonPointsArray.push(polygonPoints[0]);
             }
-
-            // Создаем новый полигон
             selectionPolygon = L.polygon(polygonPointsArray, {
                 color: 'blue',
                 fillColor: '#3388ff',
                 fillOpacity: 0.3,
                 weight: 3
             }).addTo(map);
-
-            // Автоматически обновляем выбор
             updateSelectionFromPolygon();
         }
     }
 
-    // 6. Обновление выбора на основе полигона
     function updateSelectionFromPolygon() {
         if (!selectionPolygon || polygonPoints.length < 3) return;
-
         selectedMarkers.clear();
-
         markers.forEach(function(marker) {
             var latlng = marker.getLatLng();
             if (isPointInPolygon(latlng, polygonPoints)) {
                 selectedMarkers.add(marker.placeId);
             }
         });
-
         updateCheckboxesFromSelection();
         updateMarkersAppearance();
     }
 
-    // 7. Функция проверки точки в полигоне (алгоритм ray casting)
     function isPointInPolygon(point, vs) {
         var x = point.lat, y = point.lng;
         var inside = false;
-
         for (var i = 0, j = vs.length - 1; i < vs.length; j = i++) {
             var xi = vs[i].lat, yi = vs[i].lng;
             var xj = vs[j].lat, yj = vs[j].lng;
-
             var intersect = ((yi > y) != (yj > y))
                 && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
             if (intersect) inside = !inside;
         }
-
         return inside;
     }
 
-    // 8. Синхронизация чекбоксов и маркеров
     function togglePlaceSelection(placeId) {
         if (selectedMarkers.has(placeId)) {
             selectedMarkers.delete(placeId);
@@ -366,13 +551,9 @@
         });
     }
 
-    // 9. Обработчики событий карты
     map.on('click', function(e) {
         if (isDrawing) {
-            // Добавляем точку
             polygonPoints.push(e.latlng);
-
-            // Добавляем визуальный маркер точки
             var pointMarker = L.circleMarker(e.latlng, {
                 radius: 6,
                 fillColor: 'red',
@@ -382,70 +563,15 @@
                 fillOpacity: 0.8
             }).addTo(map);
             pointMarkers.push(pointMarker);
-
-            // Обновляем полигон по алгоритму
             updatePolygon();
         }
     });
 
-    // Двойной клик для завершения рисования
     map.on('dblclick', function(e) {
         if (isDrawing && polygonPoints.length >= 3) {
             finishDrawing();
         }
     });
-
-    // 10. Инициализация обработчиков кнопок
-    document.getElementById('startDrawing').addEventListener('click', startDrawing);
-    document.getElementById('finishDrawing').addEventListener('click', finishDrawing);
-    document.getElementById('clearSelection').addEventListener('click', clearSelection);
-
-    // 11. Инициализация выбранных маркеров из формы
-    document.addEventListener('DOMContentLoaded', function() {
-        var initialCheckboxes = document.querySelectorAll('input[name="places"]:checked');
-        initialCheckboxes.forEach(function(checkbox) {
-            selectedMarkers.add(parseInt(checkbox.value));
-        });
-        updateMarkersAppearance();
-    });
-
-    // 12. Если есть маршрут - рисуем линию
-    {% if route %}
-        var routePoints = [
-            {% for point in route %}
-                [{{ point.lat|stringformat:"f" }}, {{ point.lon|stringformat:"f" }}],
-            {% endfor %}
-        ];
-
-        // Создаем массив названий для маршрута
-        var routeNames = [
-            {% for point in route %}
-                "{{ point.name }}",
-            {% endfor %}
-        ];
-
-        // Рисуем красную линию
-        var polyline = L.polyline(routePoints, {
-            color: 'red',
-            weight: 5,
-            opacity: 0.7
-        }).addTo(map);
-
-        // Добавляем маркеры для маршрута с номерами
-        routePoints.forEach(function(point, index) {
-            L.marker(point, {
-                icon: L.divIcon({
-                    className: 'route-marker',
-                    html: '<div style="background: red; color: white; border-radius: 50%; width: 25px; height: 25px; display: flex; align-items: center; justify-content: center; font-weight: bold;">' + (index + 1) + '</div>',
-                    iconSize: [25, 25],
-                    iconAnchor: [12, 12]
-                })
-            }).addTo(map).bindPopup('<strong>' + (index + 1) + '. ' + routeNames[index] + '</strong>');
-        });
-
-        // Зуммируем карту, чтобы показать весь маршрут
-        map.fitBounds(polyline.getBounds());
-    {% endif %}
 </script>
 
 </body>
